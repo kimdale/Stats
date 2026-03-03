@@ -1,0 +1,794 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Three-Judge Scoring App</title>
+
+    <!-- React (UMD) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+
+    <!-- Babel to run JSX in-browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+      html, body { height: 100%; margin: 0; }
+      button:disabled { opacity: .6; cursor: not-allowed; }
+      input { outline: none; }
+    </style>
+  </head>
+
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useEffect, useMemo, useState } = React;
+
+      const JUDGES = [
+        { key: "judge1", label: "Judge 1" },
+        { key: "judge2", label: "Judge 2" },
+        { key: "judge3", label: "Judge 3" },
+      ];
+
+      function createBlankContestant(index) {
+        return {
+          id: `contestant-${Date.now()}-${Math.random().toString(36).slice(2)}-${index}`,
+          number: index + 1,
+          name: `Contestant ${index + 1}`,
+          judge1: "",
+          judge2: "",
+          judge3: "",
+        };
+      }
+
+      function toNumber(value) {
+        if (value === "" || value === null || value === undefined) return null;
+        const n = Number(value);
+        return Number.isFinite(n) ? n : null;
+      }
+
+      function ordinal(n) {
+        const s = ["th", "st", "nd", "rd"];
+        const v = n % 100;
+        return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
+      }
+
+      function getJudgePlacements(rows, judgeKey) {
+        const ordered = rows
+          .filter((row) => row[judgeKey] !== null)
+          .slice()
+          .sort((a, b) => {
+            if (b[judgeKey] !== a[judgeKey]) return b[judgeKey] - a[judgeKey];
+            return a.name.localeCompare(b.name);
+          });
+
+        const placements = {};
+        let currentPlacement = 1;
+
+        ordered.forEach((row, index) => {
+          if (index > 0 && ordered[index - 1][judgeKey] !== row[judgeKey]) {
+            currentPlacement = index + 1;
+          }
+          placements[row.id] = currentPlacement;
+        });
+
+        return placements;
+      }
+
+      function scoreContestants(rows) {
+        const normalized = rows.map((row) => {
+          const judge1 = toNumber(row.judge1);
+          const judge2 = toNumber(row.judge2);
+          const judge3 = toNumber(row.judge3);
+          const scores = [judge1, judge2, judge3];
+          const completed = scores.every((score) => score !== null);
+          const total = scores.reduce((sum, score) => sum + (score ?? 0), 0);
+          const average = completed ? total / 3 : null;
+
+          return { ...row, judge1, judge2, judge3, scores, completed, total, average };
+        });
+
+        const placementsByJudge = Object.fromEntries(
+          JUDGES.map((judge) => [judge.key, getJudgePlacements(normalized, judge.key)])
+        );
+
+        return normalized
+          .map((row) => {
+            const judge1Place = placementsByJudge.judge1[row.id] ?? null;
+            const judge2Place = placementsByJudge.judge2[row.id] ?? null;
+            const judge3Place = placementsByJudge.judge3[row.id] ?? null;
+            const rankingScores = [judge1Place, judge2Place, judge3Place];
+            const firstPlaceVotes = rankingScores.filter((place) => place === 1).length;
+            const rankingTotal = rankingScores.reduce((sum, place) => sum + (place ?? 0), 0);
+            const rankingAverage = row.completed ? rankingTotal / 3 : null;
+
+            return {
+              ...row,
+              judge1Place,
+              judge2Place,
+              judge3Place,
+              firstPlaceVotes,
+              rankingTotal,
+              rankingAverage,
+            };
+          })
+          .sort((a, b) => {
+            if (b.firstPlaceVotes !== a.firstPlaceVotes) return b.firstPlaceVotes - a.firstPlaceVotes;
+            if (a.rankingTotal !== b.rankingTotal) return a.rankingTotal - b.rankingTotal;
+            if ((a.rankingAverage ?? Number.POSITIVE_INFINITY) !== (b.rankingAverage ?? Number.POSITIVE_INFINITY)) {
+              return (a.rankingAverage ?? Number.POSITIVE_INFINITY) - (b.rankingAverage ?? Number.POSITIVE_INFINITY);
+            }
+            if (b.total !== a.total) return b.total - a.total;
+            return a.name.localeCompare(b.name);
+          })
+          .map((row, index, arr) => {
+            const prev = arr[index - 1];
+            const sameAsPrev = Boolean(
+              prev &&
+                prev.firstPlaceVotes === row.firstPlaceVotes &&
+                prev.rankingTotal === row.rankingTotal &&
+                (prev.rankingAverage ?? Number.POSITIVE_INFINITY) === (row.rankingAverage ?? Number.POSITIVE_INFINITY)
+            );
+
+            return {
+              ...row,
+              rank: sameAsPrev ? arr[index - 1].rank : index + 1,
+            };
+          });
+      }
+
+      function getJudgeLeaderboard(rows, judge) {
+        const scoreKey = judge.key;
+        const placeKey = `${judge.key}Place`;
+
+        return rows
+          .filter((c) => c[scoreKey] !== null)
+          .slice()
+          .sort((a, b) => {
+            const aPlace = Number(a[placeKey]);
+            const bPlace = Number(b[placeKey]);
+            const aScore = Number(a[scoreKey]);
+            const bScore = Number(b[scoreKey]);
+
+            if (aPlace !== bPlace) return aPlace - bPlace;
+            if (bScore !== aScore) return bScore - aScore;
+            return a.name.localeCompare(b.name);
+          });
+      }
+
+      function runSelfTests() {
+        const cases = [];
+
+        cases.push(() => {
+          const data = [
+            { id: "a", number: 1, name: "A", judge1: 10, judge2: 9, judge3: 8 },
+            { id: "b", number: 2, name: "B", judge1: 9, judge2: 8, judge3: 7 },
+            { id: "c", number: 3, name: "C", judge1: 8, judge2: 7, judge3: 6 },
+          ];
+          const result = scoreContestants(data);
+          if (result[0].name !== "A" || result[0].firstPlaceVotes !== 3 || result[0].rank !== 1) {
+            throw new Error("Test failed: highest scores should rank first with 3 first-place votes.");
+          }
+        });
+
+        cases.push(() => {
+          const data = [
+            { id: "a", number: 1, name: "A", judge1: 10, judge2: 10, judge3: 5 },
+            { id: "b", number: 2, name: "B", judge1: 10, judge2: 8, judge3: 4 },
+            { id: "c", number: 3, name: "C", judge1: 7, judge2: 7, judge3: 10 },
+          ];
+          const result = scoreContestants(data);
+          const a = result.find((x) => x.name === "A");
+          const b = result.find((x) => x.name === "B");
+          if (!a || !b || a.judge1Place !== 1 || b.judge1Place !== 1) {
+            throw new Error("Test failed: tied judge scores should share the same placement.");
+          }
+        });
+
+        cases.push(() => {
+          const data = [
+            { id: "a", number: 1, name: "A", judge1: 9, judge2: 5, judge3: 5 },
+            { id: "b", number: 2, name: "B", judge1: 8, judge2: 9, judge3: 9 },
+            { id: "c", number: 3, name: "C", judge1: 7, judge2: 8, judge3: 8 },
+          ];
+          const result = scoreContestants(data);
+          if (result[0].name !== "B") {
+            throw new Error("Test failed: ranking logic should favor more first-place votes.");
+          }
+        });
+
+        cases.forEach((fn) => fn());
+      }
+
+      // ====== Styles ======
+      const cardStyle = {
+        background: "#ffffff",
+        border: "1px solid #e2e8f0",
+        borderRadius: 20,
+        boxShadow: "0 8px 24px rgba(15, 23, 42, 0.06)",
+      };
+
+      const mutedStyle = { color: "#64748b" };
+      const mutedSmallStyle = { color: "#64748b", fontSize: 13 };
+
+      const labelStyle = {
+        display: "block",
+        fontSize: 14,
+        fontWeight: 600,
+        marginBottom: 8,
+      };
+
+      const inputStyle = {
+        width: "100%",
+        padding: "12px 14px",
+        border: "1px solid #e2e8f0",
+        borderRadius: 12,
+        fontSize: 14,
+        background: "white",
+        boxSizing: "border-box",
+      };
+
+      const primaryButtonStyle = {
+        border: 0,
+        borderRadius: 12,
+        padding: "12px 16px",
+        fontSize: 14,
+        fontWeight: 700,
+        cursor: "pointer",
+        background: "#2563eb",
+        color: "white",
+      };
+
+      const secondaryButtonStyle = {
+        ...primaryButtonStyle,
+        background: "white",
+        color: "#0f172a",
+        border: "1px solid #e2e8f0",
+      };
+
+      const ghostButtonStyle = {
+        border: 0,
+        borderRadius: 12,
+        padding: "8px 10px",
+        fontSize: 14,
+        fontWeight: 700,
+        cursor: "pointer",
+        background: "transparent",
+        color: "#dc2626",
+      };
+
+      const thtdStyle = {
+        textAlign: "left",
+        padding: "14px 12px 14px 0",
+        borderBottom: "1px solid #e2e8f0",
+        verticalAlign: "middle",
+      };
+
+      const thtdHeadStyle = { ...thtdStyle, color: "#64748b", fontWeight: 700 };
+
+      function StatCard({ label, value }) {
+        return (
+          <div style={cardStyle}>
+            <div style={{ padding: 24 }}>
+              <div style={mutedStyle}>{label}</div>
+              <div style={{ fontSize: 34, fontWeight: 800, marginTop: 8 }}>{value}</div>
+            </div>
+          </div>
+        );
+      }
+
+      // ====== PASSWORD GATE (simple) ======
+      // Change this to your desired password.
+      const APP_PASSWORD = "1234";
+
+      function PasswordGate({ children }) {
+        const [ok, setOk] = useState(false);
+
+        useEffect(() => {
+          const saved = sessionStorage.getItem("threeJudgeAuth") === "yes";
+          if (saved) setOk(true);
+        }, []);
+
+        useEffect(() => {
+          if (ok) sessionStorage.setItem("threeJudgeAuth", "yes");
+        }, [ok]);
+
+        if (ok) return children;
+
+        return (
+          <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: "#0b1220" }}>
+            <div style={{ width: "min(520px, 92vw)", ...cardStyle, borderRadius: 22, padding: 22 }}>
+              <div style={{ fontSize: 22, fontWeight: 900, marginBottom: 6 }}>🔒 Enter Password</div>
+              <div style={{ ...mutedStyle, marginBottom: 14 }}>
+                This is a simple client-side gate (not secure against someone who can view the source).
+              </div>
+              <input
+                id="pw"
+                type="password"
+                style={inputStyle}
+                placeholder="Password"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    const val = e.target.value || "";
+                    if (val === APP_PASSWORD) setOk(true);
+                    else alert("Wrong password");
+                  }
+                }}
+              />
+              <div style={{ height: 12 }} />
+              <button
+                style={{ ...primaryButtonStyle, width: "100%" }}
+                onClick={() => {
+                  const val = document.getElementById("pw").value || "";
+                  if (val === APP_PASSWORD) setOk(true);
+                  else alert("Wrong password");
+                }}
+              >
+                Unlock
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      function ThreeJudgeScoringApp() {
+        const [activeTab, setActiveTab] = useState("entry"); // "entry" | "leaderboard" | "announce"
+        const [competitionName, setCompetitionName] = useState("Competition Scoreboard");
+        const [maxScore, setMaxScore] = useState(100);
+        const [announcementMode, setAnnouncementMode] = useState(false);
+        const [contestants, setContestants] = useState(
+          Array.from({ length: 6 }, (_, i) => createBlankContestant(i))
+        );
+
+        useEffect(() => {
+          // Keep your sanity checks
+          runSelfTests();
+        }, []);
+
+        const scoredContestants = useMemo(() => scoreContestants(contestants), [contestants]);
+
+        // Keep score entry table static order (original contestant order)
+        const scoredById = useMemo(() => new Map(scoredContestants.map((c) => [c.id, c])), [scoredContestants]);
+
+        const entryRows = useMemo(() => {
+          return contestants.map((c) => {
+            const scored = scoredById.get(c.id);
+            if (scored) return scored;
+
+            // fallback (should rarely happen)
+            return {
+              ...c,
+              scores: [toNumber(c.judge1), toNumber(c.judge2), toNumber(c.judge3)],
+              completed: false,
+              total: 0,
+              average: null,
+              judge1: toNumber(c.judge1),
+              judge2: toNumber(c.judge2),
+              judge3: toNumber(c.judge3),
+              judge1Place: null,
+              judge2Place: null,
+              judge3Place: null,
+              firstPlaceVotes: 0,
+              rankingTotal: 0,
+              rankingAverage: null,
+              rank: 0,
+            };
+          });
+        }, [contestants, scoredById]);
+
+        const completed = useMemo(() => scoredContestants.filter((c) => c.completed), [scoredContestants]);
+        const allCompleted = contestants.length > 0 && scoredContestants.every((c) => c.completed);
+        const topThree = completed.slice(0, 3);
+
+        const stats = {
+          contestants: contestants.length,
+          completed: completed.length,
+          remaining: contestants.length - completed.length,
+          topFirstPlaceVotes: completed[0]?.firstPlaceVotes ?? 0,
+        };
+
+        const updateContestant = (id, field, value) => {
+          setContestants((prev) => prev.map((c) => (c.id === id ? { ...c, [field]: value } : c)));
+        };
+
+        const addContestant = () => setContestants((prev) => [...prev, createBlankContestant(prev.length)]);
+
+        const removeContestant = (id) => {
+          setContestants((prev) =>
+            prev
+              .filter((c) => c.id !== id)
+              .map((c, index) => ({ ...c, number: index + 1 }))
+          );
+        };
+
+        const resetScores = () => {
+          setContestants((prev) => prev.map((c) => ({ ...c, judge1: "", judge2: "", judge3: "" })));
+          setAnnouncementMode(false);
+        };
+
+        const sampleScores = () => {
+          setContestants((prev) =>
+            prev.map((c) => ({
+              ...c,
+              judge1: Math.floor(Math.random() * maxScore) + 1,
+              judge2: Math.floor(Math.random() * maxScore) + 1,
+              judge3: Math.floor(Math.random() * maxScore) + 1,
+            }))
+          );
+        };
+
+        const revealResults = () => {
+          if (!allCompleted) return;
+          setAnnouncementMode(true);
+          setActiveTab("announce");
+        };
+
+        const badgeStyle = {
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "8px 12px",
+          borderRadius: 999,
+          border: "1px solid #e2e8f0",
+          background: "#fff",
+          fontSize: 13,
+          whiteSpace: "nowrap",
+        };
+
+        return (
+          <div style={{ minHeight: "100vh", background: "#f8fafc", color: "#0f172a", fontFamily: "Inter, Arial, sans-serif" }}>
+            <div style={{ maxWidth: 1380, margin: "0 auto", padding: 24 }}>
+              <div style={{ display: "grid", gap: 16, gridTemplateColumns: "minmax(0,1.2fr) minmax(320px,0.8fr)", marginBottom: 16 }}>
+                <div style={cardStyle}>
+                  <div style={{ padding: "24px 24px 12px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 30, fontWeight: 800 }}>
+                      🏆 <span>Three-Judge Scoring App</span>
+                    </div>
+                    <p style={mutedStyle}>
+                      Enter scores from three judges, convert those scores into judge rankings, and determine winners by ranking instead of raw totals.
+                    </p>
+                  </div>
+                  <div style={{ padding: "12px 24px 24px", display: "grid", gap: 16, gridTemplateColumns: "2fr 1fr" }}>
+                    <div>
+                      <label style={labelStyle}>Competition Name</label>
+                      <input style={inputStyle} value={competitionName} onChange={(e) => setCompetitionName(e.target.value)} />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Max Score per Judge</label>
+                      <input
+                        style={inputStyle}
+                        type="number"
+                        min={1}
+                        value={maxScore}
+                        onChange={(e) => setMaxScore(Math.max(1, Number(e.target.value) || 100))}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                  <StatCard label="Contestants" value={stats.contestants} />
+                  <StatCard label="Completed Scores" value={stats.completed} />
+                  <StatCard label="Remaining" value={stats.remaining} />
+                  <StatCard label="Top 1st-Place Votes" value={stats.topFirstPlaceVotes} />
+                </div>
+              </div>
+
+              <div style={{ display: "flex", background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18, overflow: "hidden", marginBottom: 16 }}>
+                {["entry", "leaderboard", "announce"].map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setActiveTab(tab)}
+                    style={{
+                      flex: 1,
+                      padding: "14px 18px",
+                      border: 0,
+                      cursor: "pointer",
+                      fontSize: 15,
+                      fontWeight: 700,
+                      color: activeTab === tab ? "#2563eb" : "#64748b",
+                      background: activeTab === tab ? "#dbeafe" : "#fff",
+                    }}
+                  >
+                    {tab === "entry" ? "Score Entry" : tab === "leaderboard" ? "Leaderboard" : "Announcement"}
+                  </button>
+                ))}
+              </div>
+
+              {activeTab === "entry" && (
+                <div style={cardStyle}>
+                  <div style={{ padding: 24 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+                      <div>
+                        <div style={{ fontSize: 22, fontWeight: 800 }}>{competitionName}</div>
+                        <p style={mutedStyle}>
+                          Add contestants and enter one score per judge. Judge rankings update instantly, and the winner is determined by ranking.
+                        </p>
+                      </div>
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        <button style={secondaryButtonStyle} onClick={sampleScores}>Sample Data</button>
+                        <button style={secondaryButtonStyle} onClick={resetScores}>Reset Scores</button>
+                        <button style={primaryButtonStyle} onClick={addContestant}>Add Contestant</button>
+                      </div>
+                    </div>
+
+                    <div style={{ overflowX: "auto", marginTop: 12 }}>
+                      <table style={{ width: "100%", minWidth: 1180, borderCollapse: "collapse", fontSize: 14 }}>
+                        <thead>
+                          <tr>
+                            {[
+                              "#",
+                              "Contestant",
+                              "Judge 1 Score",
+                              "Judge 1 Rank",
+                              "Judge 2 Score",
+                              "Judge 2 Rank",
+                              "Judge 3 Score",
+                              "Judge 3 Rank",
+                              "1st-Place Votes",
+                              "Ranking Total",
+                              "Overall Place",
+                              "Action",
+                            ].map((head) => (
+                              <th key={head} style={thtdHeadStyle}>{head}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {entryRows.map((contestant) => (
+                            <tr key={contestant.id}>
+                              <td style={thtdStyle}>{contestant.number}</td>
+                              <td style={thtdStyle}>
+                                <input
+                                  style={inputStyle}
+                                  value={contestant.name}
+                                  onChange={(e) => updateContestant(contestant.id, "name", e.target.value)}
+                                />
+                              </td>
+
+                              {JUDGES.map((judge) => (
+                                <React.Fragment key={judge.key}>
+                                  <td style={thtdStyle}>
+                                    <input
+                                      style={inputStyle}
+                                      type="number"
+                                      min={0}
+                                      max={maxScore}
+                                      value={contestant[judge.key] ?? ""}
+                                      onChange={(e) => updateContestant(contestant.id, judge.key, e.target.value)}
+                                    />
+                                  </td>
+                                  <td style={thtdStyle}>
+                                    {contestant[`${judge.key}Place`] ? ordinal(contestant[`${judge.key}Place`]) : "—"}
+                                  </td>
+                                </React.Fragment>
+                              ))}
+
+                              <td style={thtdStyle}><strong>{contestant.firstPlaceVotes}</strong></td>
+                              <td style={thtdStyle}>{contestant.completed ? contestant.rankingTotal : "—"}</td>
+                              <td style={thtdStyle}>{contestant.completed ? ordinal(contestant.rank) : "—"}</td>
+                              <td style={thtdStyle}>
+                                <button
+                                  style={ghostButtonStyle}
+                                  onClick={() => removeContestant(contestant.id)}
+                                  disabled={contestants.length === 1}
+                                >
+                                  Delete
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === "leaderboard" && (
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.1fr) minmax(320px,0.9fr)", gap: 16 }}>
+                  <div style={cardStyle}>
+                    <div style={{ padding: 24 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+                        <div>
+                          <div style={{ fontSize: 22, fontWeight: 800 }}>👥 Live Leaderboard</div>
+                          <p style={mutedStyle}>Overall results are based on judge rankings. More 1st-place votes wins, then lower ranking total breaks ties.</p>
+                        </div>
+                        <button style={primaryButtonStyle} onClick={revealResults} disabled={!allCompleted}>
+                          Reveal Final Results
+                        </button>
+                      </div>
+
+                      <div style={{ display: "grid", gap: 12 }}>
+                        {scoredContestants.map((contestant) => (
+                          <div key={contestant.id} style={{ ...cardStyle, padding: 16, borderRadius: 18, boxShadow: "none" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                                <div style={{ width: 52, height: 52, borderRadius: 18, background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 800 }}>
+                                  {contestant.completed ? contestant.rank : "—"}
+                                </div>
+                                <div>
+                                  <div style={{ fontSize: 18, fontWeight: 800 }}>{contestant.name}</div>
+                                  <div style={mutedSmallStyle}>Contestant #{contestant.number}</div>
+                                </div>
+                              </div>
+
+                              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                                <span style={badgeStyle}>J1: {contestant.judge1 ?? "—"} ({contestant.judge1Place ? ordinal(contestant.judge1Place) : "—"})</span>
+                                <span style={badgeStyle}>J2: {contestant.judge2 ?? "—"} ({contestant.judge2Place ? ordinal(contestant.judge2Place) : "—"})</span>
+                                <span style={badgeStyle}>J3: {contestant.judge3 ?? "—"} ({contestant.judge3Place ? ordinal(contestant.judge3Place) : "—"})</span>
+                                <span style={{ ...badgeStyle, background: "#2563eb", color: "#fff", borderColor: "#2563eb" }}>
+                                  1st-place votes: {contestant.firstPlaceVotes}
+                                </span>
+                                <span style={{ ...badgeStyle, background: "#f1f5f9" }}>
+                                  Ranking total: {contestant.rankingTotal}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ padding: 24 }}>
+                      <div style={{ fontSize: 22, fontWeight: 800 }}>Judge-by-Judge Rankings</div>
+                      <p style={mutedStyle}>See how each judge&apos;s scores convert into placements.</p>
+
+                      <div style={{ display: "grid", gap: 16 }}>
+                        {JUDGES.map((judge) => {
+                          const rows = getJudgeLeaderboard(scoredContestants, judge);
+                          const placeKey = `${judge.key}Place`;
+
+                          return (
+                            <div key={judge.key} style={{ ...cardStyle, borderRadius: 18, boxShadow: "none", overflow: "hidden" }}>
+                              <div style={{ padding: "14px 16px", borderBottom: "1px solid #e2e8f0", background: "#f8fafc", fontWeight: 700 }}>
+                                {judge.label}
+                              </div>
+
+                              {rows.length === 0 ? (
+                                <div style={{ padding: 16, color: "#64748b" }}>No scores entered yet.</div>
+                              ) : (
+                                rows.map((contestant, index) => (
+                                  <div
+                                    key={`${judge.key}-${contestant.id}`}
+                                    style={{
+                                      display: "flex",
+                                      justifyContent: "space-between",
+                                      alignItems: "center",
+                                      gap: 12,
+                                      padding: "14px 16px",
+                                      borderTop: index === 0 ? "none" : "1px solid #e2e8f0",
+                                    }}
+                                  >
+                                    <div>
+                                      <div style={{ fontWeight: 700 }}>{contestant.name}</div>
+                                      <div style={mutedSmallStyle}>Score: {contestant[judge.key]}</div>
+                                    </div>
+                                    <span style={badgeStyle}>{ordinal(Number(contestant[placeKey]))}</span>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === "announce" && (
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(280px,0.9fr) minmax(0,1.1fr)", gap: 16 }}>
+                  <div style={cardStyle}>
+                    <div style={{ padding: 24 }}>
+                      <div style={{ fontSize: 22, fontWeight: 800 }}>Announcement Controls</div>
+                      <p style={mutedStyle}>Switch to final-announcement mode once all contestants have three scores.</p>
+
+                      <div style={{ border: "1px solid #e2e8f0", borderRadius: 18, padding: 16 }}>
+                        <div style={mutedStyle}>Status</div>
+                        <div style={{ marginTop: 8, fontSize: 20, fontWeight: 800 }}>
+                          {allCompleted ? "Ready for final announcement" : "Still waiting on scores"}
+                        </div>
+                      </div>
+
+                      <div style={{ height: 12 }} />
+                      <button
+                        style={{ ...primaryButtonStyle, width: "100%" }}
+                        onClick={() => allCompleted && setAnnouncementMode((v) => !v)}
+                        disabled={!allCompleted}
+                      >
+                        {announcementMode ? "Hide Final Results" : "Show Final Results"}
+                      </button>
+
+                      <p style={mutedStyle}>Winners are determined by ranking: more 1st-place votes first, then lower ranking totals.</p>
+                    </div>
+                  </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ padding: "24px 24px 12px" }}>
+                      <div style={{ fontSize: 30, fontWeight: 800 }}>{competitionName}</div>
+                      <p style={mutedStyle}>Final standings for announcement</p>
+                    </div>
+
+                    <div style={{ padding: "12px 24px 24px" }}>
+                      {!announcementMode ? (
+                        <div style={{ minHeight: 360, display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", border: "1px dashed #e2e8f0", borderRadius: 18, color: "#64748b", padding: 24 }}>
+                          Final results are hidden. Use the button on the left when you&apos;re ready to announce winners.
+                        </div>
+                      ) : (
+                        <>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 16, marginBottom: 16 }}>
+                            {topThree.map((contestant, index) => (
+                              <div key={contestant.id} style={{ ...cardStyle, borderRadius: 18, boxShadow: "none", padding: 20, textAlign: "center" }}>
+                                <div style={{ fontSize: 34, marginBottom: 10 }}>{["🏆", "🥈", "🥉"][index] || "🏅"}</div>
+                                <div style={mutedStyle}>{ordinal(contestant.rank)} Place</div>
+                                <div style={{ marginTop: 6, fontSize: 28, fontWeight: 800 }}>{contestant.name}</div>
+                                <div style={{ fontSize: 44, fontWeight: 800, marginTop: 10 }}>{contestant.firstPlaceVotes}</div>
+                                <div style={mutedStyle}>1st-Place Votes</div>
+                                <div style={{ ...mutedStyle, marginTop: 8 }}>Ranking total: {contestant.rankingTotal}</div>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div style={{ ...cardStyle, borderRadius: 18, boxShadow: "none", overflow: "hidden" }}>
+                            <div style={{ padding: "14px 16px", borderBottom: "1px solid #e2e8f0", background: "#f8fafc", fontWeight: 700 }}>
+                              Full Results
+                            </div>
+
+                            {completed.map((contestant, index) => (
+                              <div
+                                key={contestant.id}
+                                style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  alignItems: "center",
+                                  gap: 12,
+                                  padding: "14px 16px",
+                                  borderTop: index === 0 ? "none" : "1px solid #e2e8f0",
+                                }}
+                              >
+                                <div>
+                                  <div style={{ fontWeight: 800 }}>
+                                    {ordinal(contestant.rank)} — {contestant.name}
+                                  </div>
+                                  <div style={mutedSmallStyle}>
+                                    J1: {contestant.judge1} ({contestant.judge1Place ? ordinal(contestant.judge1Place) : "—"}) ·
+                                    {" "}J2: {contestant.judge2} ({contestant.judge2Place ? ordinal(contestant.judge2Place) : "—"}) ·
+                                    {" "}J3: {contestant.judge3} ({contestant.judge3Place ? ordinal(contestant.judge3Place) : "—"})
+                                  </div>
+                                </div>
+
+                                <div style={{ textAlign: "right" }}>
+                                  <div style={{ fontSize: 20, fontWeight: 800 }}>{contestant.firstPlaceVotes} firsts</div>
+                                  <div style={mutedSmallStyle}>Ranking total {contestant.rankingTotal}</div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      function App() {
+        return (
+          <PasswordGate>
+            <ThreeJudgeScoringApp />
+          </PasswordGate>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
